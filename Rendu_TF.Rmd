@@ -1,0 +1,201 @@
+---
+title: "Codalab - Data challenge - pred_hist"
+author: "Théo Falquès"
+date: 'Lundi 2 décembre'
+output: 
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("~/Documents/Master_SSD/M2_S9/Biostat/DataChallenge/starting_kit_histology")
+data_test_histology <- readRDS("00_Data/data_test_histology.rds")
+data_learn <- readRDS("00_Data/data_learn.rds")
+
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(kableExtra)
+```
+
+# Intitialisation 
+```{r}
+d <- readRDS("00_Data/data_learn.rds")
+for ( v in c("sex", "tissue_status", "histology", "os_months", "dead", "dead_at_24_months", "t", "n", "m", "tnm_stage", "tnm_grade") ) {
+    d[[ v ]] <- as.factor(x = d[[ v ]])
+}
+#summary(object = d)
+
+test <- readRDS("00_Data/data_test_histology.rds")
+for ( v in c("sex", "tissue_status", "histology", "os_months", "dead", "dead_at_24_months", "t", "n", "m", "tnm_stage", "tnm_grade") ) {
+    test[[ v ]] <- as.factor(x = test[[ v ]])
+}
+#summary(object = test)
+```
+
+## Presentation rapide des données à prédire 
+Nous avons deux bases de données, une pour prédire de 546 individus et une étant l'échantillion test de 100.
+Pour la prédiction de la variable histologie nous avons 1011 variables prédictives. Dans cette étude nous nous interessont aux variables relatives aux gènes pour prédire la variable d'intéret. 
+
+Dans cette étude j'ai choisi de commencer par une prédiction naive puis les regressions de ridge, lasso et elasticnet. 
+J'ai pris la décision de tester des méthodes de regression à pénalité car ces dernières ont souvent de meilleurs résultats. De plus les méthodes AIC ont déjà été utilisés sur le tp précédent. 
+
+```{r}
+d %>% select(histology) %>% table() %>% t() %>% kable()
+```
+
+## La variable histologie 
+Nous remarquons que la variable histologie est composée de deux modalités avec, pour chaqu'une, une proportion de 50% 
+
+# Une prédiction naive 
+
+Pour commencer, nous avons essayé le modèle naïf de prédiction de la classe majoritaire. Cela nous donne la performance minimale acceptable. La performance étant de 49 à 51 % de bonne prédiction selon la classe choisie. 
+
+```{r}
+pred <- rep('TCGA-LUAD',100)
+
+
+saveRDS(pred, "results.rds")
+zip_filename <- paste0(
+    "01_rendu/0_results_"
+  , format(x = Sys.time( ), format = "%Y_%m_%d_-_%s")
+  , ".zip"
+)
+if ( !{ "zip" %in% installed.packages( ) } ) {
+    install.packages(pkgs = "zip")
+}
+zip::zip(zip_filename, "results.rds")
+print(zip_filename)
+```
+
+
+# Regression en machine learning
+
+Ici Nous avons utilisé ridge, lasso et enfin elastic-net qui est une fusion des deux précédantes techniques. 
+
+## Ridge 
+
+```{r}
+Xtrain <- d %>% select(-histology)
+Xtrain <- Xtrain[-1:-7]
+Xtrain <- Xtrain[,apply(is.na(Xtrain), 2, sum) == 0]
+Xtrain <- Xtrain %>% as.matrix()
+ytrain <- d$histology
+reg <- glmnet(x = Xtrain,
+              y = ytrain,
+              family = 'binomial',
+              lambda = 0,
+              standardize = FALSE)
+print(reg)
+
+
+Xtest <-  test %>% select(-age:-tnm_grade)
+Xtest <- Xtest %>% as.matrix()
+ypr <- predict(reg, 
+              Xtest,
+              type = 'class',
+              s = c(0) )
+
+
+saveRDS(ypr, "results.rds")
+zip_filename <- paste0(
+    "01_rendu/1_results_"
+  , format(x = Sys.time( ), format = "%Y_%m_%d_-_%s")
+  , ".zip"
+)
+if ( !{ "zip" %in% installed.packages( ) } ) {
+    install.packages(pkgs = "zip")
+}
+zip::zip(zip_filename, "results.rds")
+print(zip_filename)
+```
+
+
+## Lasso  
+
+```{r}
+Xtrain <- d %>% select(-histology)
+Xtrain <- Xtrain[-1:-7]
+Xtrain <- Xtrain[,apply(is.na(Xtrain), 2, sum) == 0]
+Xtrain <- Xtrain %>% as.matrix()
+ytrain <- d$histology
+reg <- glmnet(x = Xtrain,
+              y = ytrain,
+              family = 'binomial',
+              lambda = 1,
+              standardize = FALSE)
+print(reg)
+
+
+Xtest <-  test %>% select(-age:-tnm_grade)
+Xtest <- Xtest %>% as.matrix()
+ypl <- predict(reg, 
+              Xtest,
+              type = 'class',
+              s = c(0) )
+
+
+saveRDS(ypl, "results.rds")
+zip_filename <- paste0(
+    "01_rendu/2_results_"
+  , format(x = Sys.time( ), format = "%Y_%m_%d_-_%s")
+  , ".zip"
+)
+if ( !{ "zip" %in% installed.packages( ) } ) {
+    install.packages(pkgs = "zip")
+}
+zip::zip(zip_filename, "results.rds")
+print(zip_filename)
+```
+
+## Elasticnet
+
+```{r}
+d_s_na <- d %>%
+  select(-age:-tissue_status) %>% 
+  select(-os_months:-tnm_grade)
+test_s_na <- test %>%
+  select(-age:-tnm_grade)
+
+
+model <- train(
+  histology ~., data = d_s_na, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+
+Best_Param <-model$bestTune
+
+coef_best <- coef(model$finalModel,
+     model$Best_Param$lambda)
+
+
+ype <- model %>%
+  predict(test_s_na) %>% 
+  as.vector(.)
+
+saveRDS(ype, "results.rds")
+zip_filename <- paste0(
+    "01_rendu/3_results_"
+  , format(x = Sys.time( ), format = "%Y_%m_%d_-_%s")
+  , ".zip"
+)
+if ( !{ "zip" %in% installed.packages( ) } ) {
+    install.packages(pkgs = "zip")
+}
+zip::zip(zip_filename, "results.rds")
+print(zip_filename)
+```
+
+
+# Conclusion 
+Dans les différentes méthodes testées nous avons la méthode elastic-net qui se démarque avec presque 100% de bonne prédiction. Nous avons pour ce modèle les paramètres alpha a 0.1 et lambda a 0.0926. 
+
+Cette méthode montre ici son efficacité. En effet elle a été dévelopée pour les cas ou une n < p. Ce qui est le cas ici. 
+L'utilisation du package caret a permis une optimisation sur notre jeu d'apprentissage et une amélioration des résultats. 
